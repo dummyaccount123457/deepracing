@@ -180,16 +180,15 @@ class CommandantNet(nn.Module):
         predictions = self.prediction_layer(x)
         return predictions
 class AdmiralNet(nn.Module):
-    def __init__(self, cell='lstm', sequence_length=25, context_length = 25, hidden_dim = 100, use_float32 = False, gpu = -1, optical_flow = False):
+    def __init__(self, cell='lstm', sequence_length=25, context_length = 25,
+     hidden_dim = 100, use_float32 = True, gpu = -1, input_channels = 3, output_size = 1 ):
         super(AdmiralNet, self).__init__()
         self.gpu=gpu
         self.use_float32=use_float32
-        if optical_flow:
-            self.input_channels = 2
-        else:
-            self.input_channels = 3
+
+        self.input_channels = input_channels
         # Convolutional layers.
-        self.output_size = 1
+        self.output_size = output_size
         self.feats = nn.Sequential()
         self.feats.add_module("conv1",nn.Conv2d(self.input_channels, 24, kernel_size=5, stride=2))
         self.feats.add_module("Norm_1",nn.BatchNorm2d(24))
@@ -224,7 +223,7 @@ class AdmiralNet(nn.Module):
         # Linear layers.
         self.prediction_layer = nn.Linear(hidden_dim, self.output_size)
 
-    def forward(self, x, throttle, brake):
+    def forward(self, x, throttle=None, brake=None):
         batch_size = x.shape[0]
         #resize for convolutional layers
         x = x.view(-1, self.input_channels, 66, 200)

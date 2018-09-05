@@ -107,7 +107,7 @@ class F1CombinedDataset(Dataset):
         flowtens = torch.rand(self.context_length,2,self.im_size[0],self.im_size[1])
         i = 0
         for idx in range(imstart, imend):
-            imtens[i] = self.totens(self.images[idx])
+            imtens[i] = self.totens(self.images[idx]).float()
             flowtens[i] = torch.from_numpy( np.transpose( self.flows[idx] , (2,0,1) ) )
             i += 1
         combinedtens = torch.cat( (imtens,flowtens), dim=1 )
