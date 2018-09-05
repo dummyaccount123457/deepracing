@@ -28,8 +28,7 @@ class F1CombinedDataset(Dataset):
         self.totens = transforms.ToTensor()
         self.resize = transforms.Resize(self.im_size)
         self.topil = transforms.ToPilImage()
-    
-        return mean,stdev
+        self.length=length
     def write_pickles(self,image_pickle, label_pickle):
         filename = image_pickle
         fp = open(filename, 'wb')
