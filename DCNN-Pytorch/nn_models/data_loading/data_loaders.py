@@ -8,8 +8,72 @@ import pickle
 import cv2
 import numpy as np
 import torchvision.transforms as transforms
+class F1CombinedDataset(Dataset):
+    def __init__(self, root_folder, annotation_filepath, im_size,   
+                 img_transformation = None, label_transformation = None, context_length = 25, sequence_length=25):
+        super(Dataset, self).__init__()
+        self.im_size=im_size
+        self.root_folder = root_folder
+        self.img_transformation = img_transformation
+        self.label_transformation = label_transformation
+        self.annotation_filepath = annotation_filepath
+        self.annotations_file = open(os.path.join(self.root_folder,self.annotation_filepath), "r")
+        self.annotations = self.annotations_file.readlines()
+        length = len(self.annotations) - (context_length + sequence_length + 1)
+        self.steering = np.zeros(length, dtype=np.float32)
+        self.images = np.zeros( ( length, 3, im_size[0], im_size[1] ), dtype=np.uint8) 
+        self.flows = np.zeros( ( length, 2, im_size[0], im_size[1] ), dtype=np.float32) 
+        
+
+        self.totens = transforms.ToTensor()
+        self.resize = transforms.Resize(self.im_size)
+        self.topil = transforms.ToPilImage()
+    
+        return mean,stdev
+    def write_pickles(self,image_pickle, label_pickle):
+        filename = image_pickle
+        fp = open(filename, 'wb')
+        pickle.dump(self.images, fp, protocol=4)
+        fp.close()
+        print('File %s is saved.' % filename)
+
+        filename = label_pickle
+        fp = open(filename, 'wb')
+        pickle.dump(self.labels, fp, protocol=4)
+        fp.close()
+        print('File %s is saved.' % filename)
+    def read_pickles(self,image_pickle, label_pickle):
+        filename = image_pickle
+        fp = open(filename, 'rb')
+        self.images = pickle.load(fp)
+        fp.close()
+
+        filename = label_pickle
+        fp = open(filename, 'rb')
+        self.labels =  pickle.load(fp)
+        fp.close()
+        self.preloaded=True
+    def read_files(self):
+        print("loading data")
+        fp, ts, steering, throttle, brake = self.annotations[0].split(",")
+        fromimage 
+        for (idx,line) in tqdm(enumerate(self.annotations)):
+            fp, ts, steering, throttle, brake = line.split(",")
+            im = load_image(os.path.join(self.root_folder,"raw_images",fp))
+            im = cv2.resize(im, (self.im_size[1], self.im_size[0]), interpolation = cv2.INTER_CUBIC)
+            im = np.transpose(im, (2, 0, 1))
+            self.images[idx] = im
+            self.throttle[idx] = float(throttle)
+            self.brake[idx]=float(brake)
+            self.labels[idx] = float(steering)
+        self.preloaded=True
+    def __getitem__(self, index):
+        pass
+    def __len__(self):
+        return self.length
 class F1Dataset(Dataset):
-    def __init__(self, root_folder, annotation_filepath, im_size, use_float32=False, img_transformation = None, label_transformation = None, optical_flow=False):
+    def __init__(self, root_folder, annotation_filepath, im_size, use_float32=False, img_transformation = None, 
+                label_transformation = None):
         super(F1Dataset, self).__init__()
         self.im_size=im_size
         self.label_size = 1
