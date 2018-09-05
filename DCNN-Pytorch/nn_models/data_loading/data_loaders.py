@@ -8,6 +8,10 @@ import pickle
 import cv2
 import numpy as np
 import torchvision.transforms as transforms
+import PIL, PIL.Image as image
+def PIL2array(img):
+    arr =  np.array(img)
+    return cv2.cvtColor(arr,cv2.COLOR_RGB2BGR)
 class F1CombinedDataset(Dataset):
     def __init__(self, root_folder, annotation_filepath, im_size,   
                  img_transformation = None, label_transformation = None, context_length = 25, sequence_length=25):
@@ -23,16 +27,24 @@ class F1CombinedDataset(Dataset):
         self.steering = np.zeros(length, dtype=np.float32)
         self.images = np.zeros( ( length, 3, im_size[0], im_size[1] ), dtype=np.uint8) 
         self.flows = np.zeros( ( length, 2, im_size[0], im_size[1] ), dtype=np.float32) 
-        
-
         self.totens = transforms.ToTensor()
-        self.resize = transforms.Resize(self.im_size)
+        self.resize = transforms.Resize(im_size)
         self.topil = transforms.ToPilImage()
+        self.tonumpy = transforms.Lambda(lambda pil: PIL2array(img))
         self.length=length
-    def write_pickles(self,image_pickle, label_pickle):
+        self.preloaded=False
+
+
+    def write_pickles(self,image_pickle, flows_pickle, label_pickle):
         filename = image_pickle
         fp = open(filename, 'wb')
         pickle.dump(self.images, fp, protocol=4)
+        fp.close()
+        print('File %s is saved.' % filename)
+
+        filename = flows_pickle
+        fp = open(filename, 'rb')
+        pickle.dump(self.flows, fp, protocol=4)
         fp.close()
         print('File %s is saved.' % filename)
 
@@ -41,26 +53,31 @@ class F1CombinedDataset(Dataset):
         pickle.dump(self.labels, fp, protocol=4)
         fp.close()
         print('File %s is saved.' % filename)
-    def read_pickles(self,image_pickle, label_pickle):
+    def read_pickles(self,image_pickle, flows_pickle, label_pickle):
         filename = image_pickle
         fp = open(filename, 'rb')
         self.images = pickle.load(fp)
+        fp.close()
+
+        filename = flows_pickle
+        fp = open(filename, 'rb')
+        self.flows =  pickle.load(fp)
         fp.close()
 
         filename = label_pickle
         fp = open(filename, 'rb')
         self.labels =  pickle.load(fp)
         fp.close()
+
         self.preloaded=True
     def read_files(self):
         print("loading data")
         fp, ts, steering, throttle, brake = self.annotations[0].split(",")
-        fromimage 
-        for (idx,line) in tqdm(enumerate(self.annotations)):
+        fromimage = self.resize( image.open( os.path.join(self.root_folder,"raw_images",fp) ) )
+        for (idx,line) in tqdm(enumerate(self.annotations[1:])):
             fp, ts, steering, throttle, brake = line.split(",")
-            im = load_image(os.path.join(self.root_folder,"raw_images",fp))
-            im = cv2.resize(im, (self.im_size[1], self.im_size[0]), interpolation = cv2.INTER_CUBIC)
-            im = np.transpose(im, (2, 0, 1))
+            toimage = self.resize( image.open(os.path.join(self.root_folder,"raw_images",fp) ) )
+            im = np.transpose(self.tonumpy(im), (2, 0, 1))
             self.images[idx] = im
             self.throttle[idx] = float(throttle)
             self.brake[idx]=float(brake)
