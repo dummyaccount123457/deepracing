@@ -22,16 +22,17 @@ class F1CombinedDataset(Dataset):
         self.label_transformation = label_transformation
         self.annotation_filepath = annotation_filepath
         self.annotations_file = open(os.path.join(self.root_folder,self.annotation_filepath), "r")
-        self.annotations = self.annotations_file.readlines()
-        length = len(self.annotations) - (context_length + sequence_length + 1)
-        self.steering = np.zeros(length, dtype=np.float32)
-        self.images = np.zeros( ( length, 3, im_size[0], im_size[1] ), dtype=np.uint8) 
-        self.flows = np.zeros( ( length, 2, im_size[0], im_size[1] ), dtype=np.float32) 
+        
+        self.context_length=context_length
+        self.sequence_length=sequence_length
+        self.steering = None
+        self.images = None
+        self.flows = None
+        self.length = 0
         self.totens = transforms.ToTensor()
         self.resize = transforms.Resize(im_size)
-        self.topil = transforms.ToPilImage()
-        self.tonumpy = transforms.Lambda(lambda pil: PIL2array(img))
-        self.length=length
+        self.topil = transforms.ToPILImage()
+        self.tonumpy = transforms.Lambda(lambda pil: PIL2array(pil))
         self.preloaded=False
 
 
@@ -43,14 +44,14 @@ class F1CombinedDataset(Dataset):
         print('File %s is saved.' % filename)
 
         filename = flows_pickle
-        fp = open(filename, 'rb')
+        fp = open(filename, 'wb')
         pickle.dump(self.flows, fp, protocol=4)
         fp.close()
         print('File %s is saved.' % filename)
 
         filename = label_pickle
         fp = open(filename, 'wb')
-        pickle.dump(self.labels, fp, protocol=4)
+        pickle.dump(self.steering, fp, protocol=4)
         fp.close()
         print('File %s is saved.' % filename)
     def read_pickles(self,image_pickle, flows_pickle, label_pickle):
@@ -66,25 +67,51 @@ class F1CombinedDataset(Dataset):
 
         filename = label_pickle
         fp = open(filename, 'rb')
-        self.labels =  pickle.load(fp)
+        self.steering =  pickle.load(fp)
         fp.close()
-
+        self.length=self.steering.shape[0]
+        self.im_size = self.images.shape[1:3]
+        self.resize = transforms.Resize(self.im_size)
         self.preloaded=True
     def read_files(self):
         print("loading data")
-        fp, ts, steering, throttle, brake = self.annotations[0].split(",")
-        fromimage = self.resize( image.open( os.path.join(self.root_folder,"raw_images",fp) ) )
-        for (idx,line) in tqdm(enumerate(self.annotations[1:])):
+        annotations = self.annotations_file.readlines()
+        fp, ts, steering, throttle, brake = annotations[0].split(",")
+        prev_image = self.resize( image.open( os.path.join(self.root_folder,"raw_images",fp) ) )
+        toread = annotations[1:]
+        length = len(toread)
+        self.steering = np.zeros( (length, 1) , dtype=np.float32 )
+        self.images = np.zeros( ( length, self.im_size[0], self.im_size[1], 3 ), dtype=np.uint8) 
+        self.flows = np.zeros( ( length, self.im_size[0], self.im_size[1], 2 ), dtype=np.float32) 
+        self.length = length - (self.context_length + self.sequence_length)
+        for (idx,line) in tqdm(enumerate(toread)):
             fp, ts, steering, throttle, brake = line.split(",")
-            toimage = self.resize( image.open(os.path.join(self.root_folder,"raw_images",fp) ) )
-            im = np.transpose(self.tonumpy(im), (2, 0, 1))
-            self.images[idx] = im
-            self.throttle[idx] = float(throttle)
-            self.brake[idx]=float(brake)
-            self.labels[idx] = float(steering)
+            prev_image_np = self.tonumpy( prev_image )  
+            next_image = self.resize( image.open(os.path.join(self.root_folder,"raw_images",fp) ) )
+            next_image_np = self.tonumpy( next_image ) 
+            self.images[idx] = next_image_np
+            self.steering[idx,0] = float(steering)
+            flow = cv2.calcOpticalFlowFarneback(cv2.cvtColor(prev_image_np,cv2.COLOR_BGR2GRAY),cv2.cvtColor(next_image_np,cv2.COLOR_BGR2GRAY), 
+                                                None, 0.5, 3, 20, 8, 5, 1.2, 0)
+            self.flows[idx] = flow
+            prev_image = next_image
         self.preloaded=True
     def __getitem__(self, index):
-        pass
+        lblstart = index+self.context_length - 1
+        lblend = lblstart + self.sequence_length
+        labeltens = torch.from_numpy( self.steering[ lblstart : lblend ] )
+
+        imstart = index
+        imend = imstart+self.context_length
+        imtens = torch.rand(self.context_length,3,self.im_size[0],self.im_size[1])
+        flowtens = torch.rand(self.context_length,2,self.im_size[0],self.im_size[1])
+        i = 0
+        for idx in range(imstart, imend):
+            imtens[i] = self.totens(self.images[idx])
+            flowtens[i] = torch.from_numpy( np.transpose( self.flows[idx] , (2,0,1) ) )
+            i += 1
+        combinedtens = torch.cat( (imtens,flowtens), dim=1 )
+        return combinedtens,labeltens
     def __len__(self):
         return self.length
 class F1Dataset(Dataset):
