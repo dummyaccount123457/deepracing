@@ -31,7 +31,7 @@ class F1CombinedDataset(Dataset):
         self.totens = transforms.ToTensor()
         self.resize = transforms.Resize(im_size)
         self.topil = transforms.ToPILImage()
-        self.tonumpy = transforms.Lambda(lambda pil: PIL2array(pil))
+        self.tonumpy = transforms.Lambda( lambda pil: PIL2array(pil ) )
         self.preloaded=False
 
     def statistics(self):
@@ -75,7 +75,7 @@ class F1CombinedDataset(Dataset):
         fp = open(filename, 'rb')
         self.steering =  pickle.load(fp)
         fp.close()
-        self.length=self.steering.shape[0]
+        self.length=self.steering.shape[0] - (self.context_length + self.sequence_length)
         self.im_size = self.images.shape[1:3]
         self.resize = transforms.Resize(self.im_size)
         self.preloaded=True
@@ -99,7 +99,7 @@ class F1CombinedDataset(Dataset):
             self.steering[idx,0] = float(steering)
             flow = cv2.calcOpticalFlowFarneback(cv2.cvtColor(prev_image_np,cv2.COLOR_BGR2GRAY),cv2.cvtColor(next_image_np,cv2.COLOR_BGR2GRAY), 
                                                 None, 0.5, 3, 20, 8, 5, 1.2, 0)
-            self.flows[idx] = flow
+            self.flows[idx] = flow.astype(np.float32)
             prev_image = next_image
         self.preloaded=True
     def __getitem__(self, index):
@@ -109,15 +109,16 @@ class F1CombinedDataset(Dataset):
 
         imstart = index
         imend = imstart+self.context_length
-        imtens = torch.rand(self.context_length,3,self.im_size[0],self.im_size[1])
-        flowtens = torch.rand(self.context_length,2,self.im_size[0],self.im_size[1])
+        images = torch.zeros(self.context_length,5,self.im_size[0],self.im_size[1])
         i = 0
         for idx in range(imstart, imend):
-            imtens[i] = self.totens(self.images[idx]).float()
-            flowtens[i] = torch.from_numpy( np.transpose( self.flows[idx] , (2,0,1) ) )
+            imtens = self.totens(self.images[idx]).float()
+            flowtens = torch.from_numpy( np.transpose( self.flows[idx] , (2,0,1) ) )
+            images[i] = torch.cat( (imtens,flowtens), dim=0 )
+            if self.img_transformation is not None:
+                images[i] = self.img_transformation(images[i])
             i += 1
-        combinedtens = torch.cat( (imtens,flowtens), dim=1 )
-        return combinedtens,labeltens
+        return images,labeltens
     def __len__(self):
         return self.length
 class F1Dataset(Dataset):

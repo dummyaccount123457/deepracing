@@ -23,11 +23,11 @@ def run_epoch(network, criterion, optimizer, trainLoader, gpu = -1):
     batch_size = trainLoader.batch_size
     num_samples=0
     t = tqdm(enumerate(trainLoader))
-    for (i, (inputs, throttle, brake,_, labels)) in t:
+    for (i, (inputs, labels)) in t:
+        throttle = None
+        brake = None
         if gpu>=0:
             inputs = inputs.cuda(gpu)
-            throttle = throttle.cuda(gpu)
-            brake= brake.cuda(gpu)
             labels = labels.cuda(gpu)
         # Forward pass:
         outputs = network(inputs,throttle,brake)
@@ -149,15 +149,18 @@ def main():
         network = network.cuda(gpu)
     
     
-    trainset.read_files()
+   # trainset.read_files()
+    #trainset.write_pickles(prefix+"_images.pkl",prefix+"_flows.pkl",prefix+"_labels.pkl")
+    trainset.read_pickles("australia_fullview_run2_images.pkl","australia_fullview_run2_flows.pkl","australia_fullview_run2_labels.pkl")
     mean,stdev = trainset.statistics()
     mean_ = torch.from_numpy(mean).float()
     stdev_ = torch.from_numpy(stdev).float()
-    img_transformation = transforms.Normalize(mean_,stdev_)
+    trainset.img_transformation = transforms.Normalize(mean_,stdev_)
    # trainset.img_transformation = transforms.Normalize([2.5374081e-06, -3.1837547e-07] , [3.0699273e-05, 5.9349504e-06])
-    print(img_transformation)
+    print("Channel means: ",  mean_)
+    print("Channel standard deviations: ", stdev_)
     config['image_transformation'] = trainset.img_transformation
-    config['label_transformation'] = trainset.label_transformation
+    config['label_transformation'] = None
     print("Using configuration: ", config)
     if(not os.path.isdir(output_dir)):
         os.makedirs(output_dir)

@@ -137,7 +137,7 @@ def main():
             '''
 
 
-    new_data = sorted(new_data, key=itemgetter(0))
+    #new_data = sorted(new_data, key=itemgetter(0))
     with open(annot_file,'w',newline='') as f:
         writer = csv.writer(f)
         writer.writerows(new_data)              
