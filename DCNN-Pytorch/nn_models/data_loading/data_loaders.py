@@ -13,8 +13,7 @@ def PIL2array(img):
     arr =  np.array(img)
     return cv2.cvtColor(arr,cv2.COLOR_RGB2BGR)
 class F1CombinedDataset(Dataset):
-    def __init__(self, root_folder, annotation_filepath, im_size,   
-                 img_transformation = None, label_transformation = None, context_length = 25, sequence_length=25):
+    def __init__(self, root_folder, annotation_filepath, im_size, img_transformation = None, label_transformation = None, context_length = 25, sequence_length=25):
         super(Dataset, self).__init__()
         self.im_size=im_size
         self.root_folder = root_folder
@@ -35,7 +34,14 @@ class F1CombinedDataset(Dataset):
         self.tonumpy = transforms.Lambda(lambda pil: PIL2array(pil))
         self.preloaded=False
 
+    def statistics(self):
+        mean_images = np.mean(self.images, (0,1,2) )/255.0
+        mean_flows = np.mean(self.flows, (0,1,2) )
 
+        stdev_images = np.std(self.images, (0,1,2) )/255.0
+        stdev_flows = np.std(self.flows, (0,1,2) )
+        
+        return np.concatenate( ( mean_images, mean_flows ) ) , np.concatenate( ( stdev_images,stdev_flows ) )
     def write_pickles(self,image_pickle, flows_pickle, label_pickle):
         filename = image_pickle
         fp = open(filename, 'wb')

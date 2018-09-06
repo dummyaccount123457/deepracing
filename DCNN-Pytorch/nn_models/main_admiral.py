@@ -119,7 +119,6 @@ def main():
     optical_flow = bool(config['optical_flow'])
     super_convergence = bool(config['super_convergence'])
 
-    label_scale = float(config['label_scale'])
     momentum = float(config['momentum'])
 
     batch_size = int(config['batch_size'])
@@ -141,52 +140,22 @@ def main():
     prefix = prefix + file_prefix
     rnn_cell_type = 'lstm'
     output_dir = output_dir +"_"+rnn_cell_type
-    network = models.AdmiralNet(cell=rnn_cell_type, context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu, optical_flow = optical_flow)
+    network = models.AdmiralNet(cell=rnn_cell_type, context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu, input_channels=5)
     starting_epoch = 0
-    if(checkpoint_file!=''):
-        dir, file = os.path.split(checkpoint_file)
-        _,ep = file.split("epoch")
-        num, ext = ep.split(".")
-        starting_epoch = int(num)
-        print("Starting Epoch number:",  starting_epoch)
-        state_dict = torch.load(checkpoint_file)
-        network.load_state_dict(state_dict)
-    if(label_scale == 1.0):
-        label_transformation = None
-    else:
-        label_transformation = transforms.Compose([transforms.Lambda(lambda inputs: inputs.mul(label_scale))])
-    if(use_float32):
-        network.float()
-        trainset = loaders.F1SequenceDataset(root_dir,annotation_file,(66,200),\
-        context_length=context_length, sequence_length=sequence_length, use_float32=True, label_transformation = label_transformation, optical_flow = optical_flow)
-    else:
-        network.double()
-        trainset = loaders.F1SequenceDataset(root_dir, annotation_file,(66,200),\
-        context_length=context_length, sequence_length=sequence_length, label_transformation = label_transformation, optical_flow = optical_flow)
+    trainset = loaders.F1CombinedDataset(root_dir,annotation_file,(66,200),\
+        context_length=context_length, sequence_length=sequence_length)
+    network = network.float()
     if(gpu>=0):
         network = network.cuda(gpu)
     
     
-   # trainset.read_files()
-    if optical_flow:
-        if(load_files or (not os.path.isfile("./" + prefix+"_opticalflows.pkl")) or (not os.path.isfile("./" + prefix+"_opticalflowannotations.pkl"))):
-            trainset.read_files_flow()
-            trainset.write_pickles(prefix+"_opticalflows.pkl",prefix+"_opticalflowannotations.pkl")
-        else:  
-            trainset.read_pickles(prefix+"_opticalflows.pkl",prefix+"_opticalflowannotations.pkl")
-    else:
-        if(load_files or (not os.path.isfile("./" + prefix+"_images.pkl")) or (not os.path.isfile("./" + prefix+"_annotations.pkl"))):
-            trainset.read_files()
-            trainset.write_pickles(prefix+"_images.pkl",prefix+"_annotations.pkl")
-        else:  
-            trainset.read_pickles(prefix+"_images.pkl",prefix+"_annotations.pkl")
-
+    trainset.read_files()
     mean,stdev = trainset.statistics()
     mean_ = torch.from_numpy(mean).float()
     stdev_ = torch.from_numpy(stdev).float()
-    trainset.img_transformation = transforms.Normalize(mean_,stdev_)
+    img_transformation = transforms.Normalize(mean_,stdev_)
    # trainset.img_transformation = transforms.Normalize([2.5374081e-06, -3.1837547e-07] , [3.0699273e-05, 5.9349504e-06])
-    print(trainset.img_transformation)
+    print(img_transformation)
     config['image_transformation'] = trainset.img_transformation
     config['label_transformation'] = trainset.label_transformation
     print("Using configuration: ", config)
