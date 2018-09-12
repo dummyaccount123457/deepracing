@@ -13,64 +13,77 @@ import pickle
 from datetime import datetime
 import os
 import string
+import glob
 import argparse
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 
-def run_epoch(network, criterion, optimizer, trainLoader, gpu = -1):
-    network.train()  # This is important to call before training!
+def train_model(network, criterion, optimizer, load_files,cell_type, file_prefix,context_length,sequence_length,batch_size,label_transformation,workers,epoch,output_dir,use_float32,root_dir, annotation_file, gpu = -1):
+           
     cum_loss = 0.0
-    batch_size = trainLoader.batch_size
     num_samples=0
-    t = tqdm(enumerate(trainLoader))
-    for (i, (inputs, labels)) in t:
-        throttle = None
-        brake = None
-        if gpu>=0:
-            inputs = inputs.cuda(gpu)
-            labels = labels.cuda(gpu)
-        # Forward pass:
-        outputs = network(inputs,throttle,brake)
-        loss = criterion(outputs, labels)
+    entry_flag=True
 
-        # Backward pass:
-        optimizer.zero_grad()
-        loss.backward() 
+    for file in load_files:
+        if(entry_flag and epoch!=0):
+            log_path = os.path.join(output_dir,"epoch"+str(epoch)+".model")
+            entry_flag=False
+        else:
+            log_path = os.path.join(output_dir,"epoch"+str(epoch+1)+".model")
+        state_dict = torch.load(log_path)
+        network.load_state_dict(state_dict)
+        #Load partitioned Trainset
+        dir,file = file.split('\\')
+        prefix,data_type,op,suffix = file.split('_')
+        data_type='labels'
+        label_file = prefix+'_'+data_type+'_'+op+'_'+suffix
+            
+        #print('Reading Trainset %s'%(file))
+        if(use_float32):
+            network.float()
+            trainset = loaders.F1SequenceDataset(root_dir,annotation_file,(66,200),\
+            context_length=context_length, sequence_length=sequence_length, use_float32=True, label_transformation = label_transformation)
+        else:
+            network.double()
+            trainset = loaders.F1SequenceDataset(root_dir, annotation_file,(66,200),\
+            context_length=context_length, sequence_length=sequence_length, label_transformation = label_transformation)
+        trainset.read_pickles(os.path.join(dir,file),os.path.join(dir,label_file))
+        mean,stdev = trainset.statistics()
+        mean_ = torch.from_numpy(mean)
+        stdev_ = torch.from_numpy(stdev)
+        if use_float32:
+            mean_.float()
+            stdev_.float()
+        trainset.img_transformation = transforms.Normalize(mean_,stdev_)
+        trainLoader = torch.utils.data.DataLoader(trainset, batch_size = batch_size, shuffle = False, num_workers = workers)
+        t = tqdm(enumerate(trainLoader),desc='\tTraining Data (Epoch:%d(%d), lr=%f)'%(epoch+1,int(suffix.split('.')[0]),optimizer.param_groups[0]['lr']),leave=True)
+        for (i, (inputs, throttle, brake,_, labels,flag)) in t:
+            if(all(flag.numpy())):
+                if gpu>=0:
+                    inputs = inputs.cuda(gpu)
+                    throttle = throttle.cuda(gpu)
+                    brake= brake.cuda(gpu)
+                    labels = labels.cuda(gpu)
+                # Forward pass:
+                outputs = network(inputs,throttle,brake)
+                loss = criterion(outputs, labels)
 
-        # Weight and bias updates.
-        optimizer.step()
+                # Backward pass:
+                optimizer.zero_grad()
+                loss.backward() 
 
-        # logging information.
-        cum_loss += loss.item()
-        num_samples += batch_size
-        t.set_postfix(cum_loss = cum_loss/num_samples)
-    return cum_loss/num_samples
- 
+                # Weight and bias updates.
+                optimizer.step()
 
-def train_model(network, criterion, optimizer, trainLoader,cell_type, file_prefix, directory,super_convergence, n_epochs = 10, gpu = -1, starting_epoch = 0):
-    if gpu>=0:
-        criterion = criterion.cuda(gpu)
-    # Training loop.
-    if(not os.path.isdir(directory)):
-        os.makedirs(directory)
-    losses = []
-    lrs = []
-    learning_rate = optimizer.param_groups[0]['lr']
-    for epoch in range(starting_epoch, starting_epoch + n_epochs):
-        epoch_num = epoch + 1
-        print("Epoch %d of %d, lr= %f" %(epoch_num, n_epochs,optimizer.param_groups[0]['lr']))
-        loss = run_epoch(network, criterion, optimizer, trainLoader, gpu)
-        losses.append(loss)
-        lrs.append(optimizer.param_groups[0]['lr'])
-        if(super_convergence):
-            if(epoch_num%5!=0):
-                optimizer.param_groups[0]['lr'] += learning_rate
+                # logging information.
+                cum_loss += loss.item()
+                num_samples += batch_size
+                t.set_postfix(cum_loss = cum_loss/num_samples)
             else:
-                optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']*2
-                learning_rate = optimizer.param_groups[0]['lr']
-        log_path = os.path.join(directory,""+file_prefix+"_epoch"+str(epoch_num)+".model")
+                continue #using break breaks the tqdm, ignore the iter count.
+        log_path = os.path.join(output_dir,"epoch"+str(epoch+1)+".model")
         torch.save(network.state_dict(), log_path)
-    return losses, lrs
+    return cum_loss,num_samples,optimizer.param_groups[0]['lr']
 def load_config(filepath):
     rtn = dict()
     rtn['batch_size']='8'
@@ -84,9 +97,8 @@ def load_config(filepath):
     rtn['workers']='0'
     rtn['context_length']='10'
     rtn['sequence_length']='10'
-    rtn['hidden_dim']='100'
+    rtn['hidden_dim']='50'
     rtn['checkpoint_file']=''
-    rtn['optical_flow']=''
     rtn['super_convergence']=''
 
 
@@ -116,78 +128,124 @@ def main():
 
     load_files = bool(config['load_files'])
     use_float32 = bool(config['use_float32'])
-    optical_flow = bool(config['optical_flow'])
     super_convergence = bool(config['super_convergence'])
 
+    label_scale = float(config['label_scale'])
     momentum = float(config['momentum'])
 
     batch_size = int(config['batch_size'])
     gpu = int(config['gpu'])
     epochs = int(config['epochs'])
-    workers = int(config['workers'])
+    workers = int(config['workers']) #Number of workers does not work in windows
     context_length = int(config['context_length'])
     sequence_length = int(config['sequence_length'])
     hidden_dim = int(config['hidden_dim'])
-    
-
-    
-    
 
     _, config_file = os.path.split(config_fp)
     config_file_name, _ = config_file.split(".")
     output_dir = config_file_name.replace("\n","")
     
     prefix = prefix + file_prefix
+
+    #Declare the Network
     rnn_cell_type = 'lstm'
-    output_dir = output_dir +"_"+rnn_cell_type
-    network = models.AdmiralNet(cell=rnn_cell_type, context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu, input_channels=5)
+    output_dir = output_dir +"_"+rnn_cell_type+'_'+str(learning_rate)
+    network = models.AdmiralNet(cell=rnn_cell_type, context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu)
     starting_epoch = 0
-    trainset = loaders.F1CombinedDataset(root_dir,annotation_file,(66,200),\
-        context_length=context_length, sequence_length=sequence_length)
-    network = network.float()
+    if(checkpoint_file!=''):
+        dir, file = os.path.split(checkpoint_file)
+        _,ep = file.split("epoch")
+        num, ext = ep.split(".")
+        starting_epoch = int(num)
+        print("Starting Epoch number:",  starting_epoch)
+        state_dict = torch.load(checkpoint_file)
+        network.load_state_dict(state_dict)
+    if(label_scale == 1.0):
+        label_transformation = None
+    else:
+        label_transformation = transforms.Compose([transforms.Lambda(lambda inputs: inputs.mul(label_scale))])
+    if(use_float32):
+        network.float()
+        trainset = loaders.F1SequenceDataset(root_dir,annotation_file,(66,200),\
+        context_length=context_length, sequence_length=sequence_length, use_float32=True, label_transformation = label_transformation)
+    else:
+        network.double()
+        trainset = loaders.F1SequenceDataset(root_dir, annotation_file,(66,200),\
+        context_length=context_length, sequence_length=sequence_length, label_transformation = label_transformation)
     if(gpu>=0):
         network = network.cuda(gpu)
     
-    
-   # trainset.read_files()
-    #trainset.write_pickles(prefix+"_images.pkl",prefix+"_flows.pkl",prefix+"_labels.pkl")
-    trainset.read_pickles("australia_fullview_run2_images.pkl","australia_fullview_run2_flows.pkl","australia_fullview_run2_labels.pkl")
-    mean,stdev = trainset.statistics()
-    mean_ = torch.from_numpy(mean).float()
-    stdev_ = torch.from_numpy(stdev).float()
-    trainset.img_transformation = transforms.Normalize(mean_,stdev_)
-   # trainset.img_transformation = transforms.Normalize([2.5374081e-06, -3.1837547e-07] , [3.0699273e-05, 5.9349504e-06])
-    print("Channel means: ",  mean_)
-    print("Channel standard deviations: ", stdev_)
-    config['image_transformation'] = trainset.img_transformation
-    config['label_transformation'] = None
-    print("Using configuration: ", config)
+    #Create Model Dump Directory
     if(not os.path.isdir(output_dir)):
         os.makedirs(output_dir)
+
+    #Check for data
+    pickle_dir,_ = annotation_file.split('.')
+    pickle_dir+='_data'
+    if(not os.path.exists(pickle_dir)):
+        os.makedirs(pickle_dir)
+    load_files = glob.glob(pickle_dir+'\saved_image_opticalflow*.pkl')
+    if(len(load_files)==0):
+        trainset.read_files_flow()
+        load_files = glob.glob(pickle_dir+'\saved_image_opticalflow*.pkl')
+ 
+    load_files.sort()
+    print(load_files)
+    final_losses = []
+    final_lrs = []
+
+    #Save the Config File
+    config['image_transformation'] = trainset.img_transformation
+    config['label_transformation'] = trainset.label_transformation
+    #print("Using configuration: ", config)
     config_dump = open(os.path.join(output_dir,"config.pkl"), 'wb')
     pickle.dump(config,config_dump)
     config_dump.close()
-    trainLoader = torch.utils.data.DataLoader(trainset, batch_size = batch_size, shuffle = True, num_workers = workers)
-    #Definition of our loss.
-    criterion = nn.MSELoss()
+    log_path = os.path.join(output_dir,"epoch"+str(1)+".model")
+    torch.save(network.state_dict(), log_path)
 
-    # Definition of optimization strategy.
+    criterion = nn.MSELoss()
     optimizer = optim.SGD(network.parameters(), lr = learning_rate, momentum=momentum)
-    losses, lrs = train_model(network, criterion, optimizer, trainLoader,rnn_cell_type, prefix, output_dir,super_convergence, n_epochs = epochs, gpu = gpu, starting_epoch = starting_epoch)
-    if(optical_flow):
-        loss_path = os.path.join(output_dir,""+prefix+"_"+rnn_cell_type+"_OF.txt")
-    else:
-        loss_path = os.path.join(output_dir,""+prefix+"_"+rnn_cell_type+".txt")
+    if gpu>=0:
+        criterion = criterion.cuda(gpu)
+    #Begin Training
+    print("Beginning Training:")
+    #network.train()  # This is important to call before training!
+    for epoch in range(starting_epoch,epochs):
+        final_loss = 0
+        final_lr = 0
+        num_samples=0
+        learning_rate = optimizer.param_groups[0]['lr']
+        print("#Epoch %d of %d, lr= %f" %(epoch+1, epochs,optimizer.param_groups[0]['lr']))
+                  
+        loss,n_samples, lr = train_model(network, criterion, optimizer,load_files,rnn_cell_type, prefix,context_length,sequence_length,batch_size,label_transformation,workers,epoch,output_dir,use_float32,root_dir, annotation_file, gpu = gpu)
+        final_loss += loss
+        num_samples+=n_samples
+        final_lr = lr
+
+        if(super_convergence):
+            if(epoch%5!=0):
+                optimizer.param_groups[0]['lr'] += learning_rate
+            else:
+                optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']*2
+                learning_rate = optimizer.param_groups[0]['lr']
+        final_losses.append(final_loss/float(num_samples))
+        #print('\nFinal Loss: %f'%(final_loss/float(num_samples)))
+        final_lrs.append(final_lr)
+       
+    #Log Loss progress
+    loss_path = os.path.join(output_dir,""+prefix+"_"+rnn_cell_type+"_OF.txt")
     f = open(loss_path, "w")
-    f.write("\n".join(map(lambda x: str(x), losses)))
+    f.write("\n".join(map(lambda x: str(x), final_losses)))
     f.close()
 
+    #Save Superconvergence Graph
     if(super_convergence):
         fig = plt.figure()
         ax = plt.subplot(111)
         ax.set_xscale('log')
-        ax.plot(lrs,losses,'b')
-        plt.savefig("admiralnet_super_convergence_plot.jpeg")
+        ax.plot(final_lrs,final_losses,'b')
+        plt.savefig(os.path.join(output_dir,"admiralnet_super_convergence_plot.jpeg"))
         plt.show()
 
 if __name__ == '__main__':
