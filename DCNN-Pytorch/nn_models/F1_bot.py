@@ -14,22 +14,33 @@ import pyf1_datalogger
 import torchvision.transforms as transforms
 import imutils.annotation_utils
 import numpy_ringbuffer
+import data_loading.data_loaders as dataloaders
+import PIL
+import PIL.Image as pilImg
 def grab_screen(dl):
     return dl.read()
-def fill_buffer(buffer, dataloader, dt=0.0, context_length=10, interp = cv2.INTER_AREA):
+def fill_buffer(buffer, dataloader, context_length, dt=0.0, interp = cv2.INTER_AREA, totens = transforms.ToTensor(), normalize=None ):
     pscreen = grab_screen(dataloader)
-    pscreen = cv2.cvtColor(pscreen,cv2.COLOR_BGR2GRAY)
-    pscreen = cv2.resize(pscreen,(200,66), interpolation=interp)
+    pscreen_grey = cv2.cvtColor(pscreen,cv2.COLOR_BGRA2GRAY)
+    pscreen_grey = cv2.resize(pscreen_grey,(200,66), interpolation=interp)
     while(buffer.shape[0]<context_length):
         cv2.waitKey(dt)
         screen = grab_screen(dataloader)
-        screen = cv2.cvtColor(screen,cv2.COLOR_BGR2GRAY)
-        screen = cv2.resize(screen,(200,66), interpolation=interp)
-        flow = cv2.calcOpticalFlowFarneback(pscreen,screen, None, 0.5, 3, 20, 8, 5, 1.2, 0)
-        im= flow.transpose(2, 0, 1).astype(np.float32)
+        screen_resize = cv2.resize( screen, ( 200, 66 ) , interpolation=interp)
+        screen_grey = cv2.cvtColor(screen_resize,cv2.COLOR_BGRA2GRAY)
+        flow = cv2.calcOpticalFlowFarneback(pscreen_grey,screen_grey, None, 0.5, 3, 20, 8, 5, 1.2, 0)
+        flow_ = flow.transpose(2, 0, 1).astype(np.float32)
+        screen_ = totens(screen_resize[:,:,0:3]).float().numpy()
+        print(flow_.shape)
+        print(screen_.shape)
+        im = np.concatenate((screen_,flow_),axis=0)
+        if normalize is not None:
+            im = normalize( torch.from_numpy(im) ).numpy()
         buffer.append(im)
-        pscreen = screen
-    return pscreen
+        pscreen_grey = screen_grey
+    return screen_grey
+
+    
 def main():
     parser = argparse.ArgumentParser(description="Test AdmiralNet")
     parser.add_argument("--model_file", type=str, required=True)
@@ -39,6 +50,7 @@ def main():
     config_path = os.path.join(model_dir,'config.pkl')
     config_file = open(config_path,'rb')
     config = pickle.load(config_file)
+    print(config)
     model_prefix, _ = model_file.split(".")
 
     gpu = int(config['gpu'])
@@ -48,8 +60,9 @@ def main():
     sequence_length = int(config['sequence_length'])
     hidden_dim = int(config['hidden_dim'])
     optical_flow = bool(config.get('optical_flow',''))
+    image_transformation = config.get('image_transformation',None)
     rnn_cell_type='lstm'
-    network = models.AdmiralNet(cell=rnn_cell_type,context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu, optical_flow=optical_flow)
+    network = models.AdmiralNet(cell=rnn_cell_type,context_length = context_length, sequence_length=sequence_length, hidden_dim = hidden_dim, use_float32 = use_float32, gpu = gpu, input_channels=5)
     state_dict = torch.load(args.model_file)
     network.load_state_dict(state_dict)
     network=network.float()
@@ -77,14 +90,15 @@ def main():
     inputs = []
     '''
     '''
-    wheel_pred = cv2.imread('predicted_fixed.png',cv2.IMREAD_UNCHANGED)
+    wheel_pred = pilImg.open('steering_wheel.png')
     wheelrows_pred = 66
     wheelcols_pred = 66
-    wheel_pred = cv2.resize(wheel_pred, (wheelcols_pred,wheelrows_pred), interpolation = cv2.INTER_CUBIC)
-    buffer = numpy_ringbuffer.RingBuffer(capacity=context_length, dtype=(np.float32, (2,66,200) ) )
+    resize_wheel = transforms.Resize((wheelcols_pred,wheelrows_pred))
+    wheel_pred = resize_wheel(wheel_pred)
+    toNP_alpha = transforms.Compose([transforms.Lambda(lambda img : np.array(img) ) , transforms.Lambda(lambda img : cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA ) )  ] )
+    buffer = numpy_ringbuffer.RingBuffer(capacity=context_length, dtype=(np.float32, (5,66,200) ) )
 
     dt = 12
-    context_length=10
     debug=True
     app="F1 2017"
     dl = pyf1_datalogger.ScreenVideoCapture()
@@ -92,38 +106,49 @@ def main():
     interp = cv2.INTER_AREA
     if debug:
         cv2.namedWindow(app, cv2.WINDOW_AUTOSIZE)
-    pscreen = fill_buffer(buffer,dl,dt=dt,context_length=context_length,interp=interp)
-    buffer_torch = torch.rand(1,10,2,66,200).float()
-    buffer_torch=buffer_torch.cuda(0)
+    totens = transforms.ToTensor()
+    resize = transforms.Resize((66,200))
+    toNP = transforms.Compose([transforms.Lambda(lambda img : np.array(img) ) , transforms.Lambda(lambda img : cv2.cvtColor(img, cv2.COLOR_RGB2BGR ) )  ] )
+    toPIL = transforms.Compose([transforms.Lambda(lambda img : cv2.cvtColor(img, cv2.COLOR_BGR2RGB ) ) , transforms.ToPILImage() ] )
+    toPIL_alpha = transforms.Compose([transforms.Lambda(lambda img : cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA ) ) , transforms.ToPILImage() ] )
+    print(context_length)
+    pscreen_grey = fill_buffer(buffer,dl,context_length,dt=dt,interp=interp, normalize = image_transformation)
+    buffer_torch = torch.zeros((1,context_length,5,66,200), dtype=torch.float32)
     while(True):
         cv2.waitKey(dt)
         screen = grab_screen(dl)
-        screen_grey = cv2.cvtColor(screen,cv2.COLOR_BGR2GRAY)
-        screen_grey = cv2.resize(screen_grey,(200,66), interpolation=interp)
-        flow = cv2.calcOpticalFlowFarneback(pscreen,screen_grey, None, 0.5, 3, 20, 8, 5, 1.2, 0)
-        im= flow.transpose(2, 0, 1).astype(np.float32)
-        buffer.append(im)
-        pscreen = screen_grey
-        buffer_torch[0] = torch.from_numpy(np.array(buffer))
+        screen_pil = toPIL_alpha(screen)
+        screen_resize = resize(screen_pil)
+        screen_resizenp = toNP_alpha(screen_resize)
+        screen_grey = cv2.cvtColor(screen_resizenp, cv2.COLOR_BGRA2GRAY)
+        flow = cv2.calcOpticalFlowFarneback(pscreen_grey,screen_grey, None, 0.5, 3, 20, 8, 5, 1.2, 0)
+        screen_ = totens(screen_resizenp[:,:,0:3]).float()
+        flow_ = torch.from_numpy(flow.transpose(2, 0, 1).astype(np.float32))
+        im = torch.cat( ( screen_, flow_ ) ,dim=0)
+        if image_transformation is not None:
+            im = image_transformation( im )
+        buffer.append( im.numpy() )
+        pscreen_grey = screen_grey
+        buffer_arr = np.array(buffer)
+        buffer_torch[0] = torch.from_numpy(buffer_arr)
+        buffer_torch=buffer_torch.cuda(gpu)
         #print("Input Size: " + str(buffer_torch.size()))
         outputs = network(buffer_torch, throttle=None, brake=None )
-        angle = outputs[0][0].item()
+        angle = outputs[0][0].item() +0.04
         print("Output: " + str(angle))
-        scaled_pred_angle = 180.0*angle+7
-        M_pred = cv2.getRotationMatrix2D((wheelrows_pred/2,wheelcols_pred/2),scaled_pred_angle,1)
-        wheel_pred_rotated = cv2.warpAffine(wheel_pred,M_pred,(wheelrows_pred,wheelcols_pred))
+        scaled_pred_angle = 180.0*angle
+        wheel_pred_rotated = transforms.functional.rotate(wheel_pred,scaled_pred_angle)
+        wheel_np = toNP_alpha(wheel_pred_rotated)
         background = screen
         out_size = background.shape
-        print(out_size)
-        print(wheel_pred_rotated.shape)
-        overlayed_pred = imutils.annotation_utils.overlay_image(background,wheel_pred_rotated,int((out_size[1]-wheelcols_pred)/2),int((out_size[0]-wheelcols_pred)/2))
+        overlayed_pred = imutils.annotation_utils.overlay_image(background,wheel_np)
         if debug:
             cv2.imshow(app,overlayed_pred)
+        '''
         vjoy_angle = -angle*vjoy_max + vjoy_max/2.0
         js.setAxisXRot(int(round(vjoy_angle))) 
         js.setAxisYRot(int(round(vjoy_angle))) 
         vj.update(js)
-        '''
         '''
         
     print(buffer.shape)             
