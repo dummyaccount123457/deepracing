@@ -74,7 +74,7 @@ def main():
         batch_size = 1
     else:
         batch_size = 32
-    loader = torch.utils.data.DataLoader(trainset, batch_size = batch_size, shuffle = False, num_workers = 0)
+    loader = torch.utils.data.DataLoader(trainset, batch_size = 1, shuffle = False, num_workers = 0)
     cum_diff = 0.0
     t = tqdm(enumerate(loader))
     network.eval()
@@ -102,15 +102,17 @@ def main():
             labels = labels.cuda(gpu)
         pred = torch.div(network(inputs),label_scale)
         if plot:
-            if pred.shape[1] == 1:
-                angle = pred.item()
-                ground_truth = labels.item()
-            else:
-                angle = pred.squeeze()[0].item()
-                ground_truth = labels.squeeze()[0].item()
-            predictions.append(angle)
-            ground_truths.append(ground_truth)
-            t.set_postfix(angle = angle, ground_truth = ground_truth)
+            print("plotting stuff, yay")
+        if pred.shape[1] == 1:
+            angle = pred.item()
+            ground_truth = labels.item()
+        else:
+            pass
+        #    angle = pred.squeeze()[0].item()
+          #  ground_truth = labels.squeeze()[0].item()
+      #  predictions.append(angle)
+       # ground_truths.append(ground_truth)
+       # t.set_postfix(angle = angle, ground_truth = ground_truth)
         loss = criterion(pred, labels)
         losses.append(torch.mean(loss).item())
        # print("Ground Truth: %f. Prediction: %f.\n" %(scaled_ground_truth, scaled_angle))
@@ -133,13 +135,15 @@ def main():
         '''
     predictions_array = np.array(predictions)
     ground_truths_array = np.array(ground_truths)
-    log_name = "ouput_log.txt"
-    log_output_path = os.path.join(imdir,log_name)
+    log_name = "ensign_" + model_prefix + "_ouput_log.txt"
+    log_output_path = os.path.join(trainset.root_folder,log_name)
+    print("Saving results to " + log_output_path)
     log = list(zip(ground_truths_array,predictions_array))
     with open(log_output_path, "a") as myfile:
         for x in log:
             log_item = [x[0],x[1]]
             myfile.write("{0},{1}\n".format(log_item[0],log_item[1]))
+    print("File saved")
     diffs = np.subtract(predictions_array,ground_truths_array)
     rms = np.sqrt(np.mean(np.array(losses)))
     nrms = np.sqrt(np.mean(np.divide(np.square(np.array(losses)),np.multiply(np.mean(np.array(predictions)),np.mean(np.array(ground_truths))))))
