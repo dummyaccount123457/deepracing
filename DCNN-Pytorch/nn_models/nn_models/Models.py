@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torchvision.models as visionmodels
 import torchvision.models.vgg
+import torch.onnx.symbolic
 
 class ResNetAdapter(nn.Module):
     def __init__(self):
@@ -186,7 +187,7 @@ class AdmiralNet(nn.Module):
         self.gpu=gpu
         self.use_float32=use_float32
         #self.input_channels = 5
-        self.input_channels = 2
+        self.input_channels = 3
         # Convolutional layers.
 
         self.output_size = 1
@@ -211,13 +212,13 @@ class AdmiralNet(nn.Module):
         self.cell = cell
 
         if(self.cell=='lstm'):
-            self.rnn = nn.LSTM(self.feature_length, hidden_dim, batch_first = True)
+            self.rnn = nn.LSTM(self.feature_length, hidden_dim, batch_first = False)
 
         elif(self.cell=='gru'):
-            self.rnn = nn.GRU(self.feature_length, hidden_dim, batch_first = True)
+            self.rnn = nn.GRU(self.feature_length, hidden_dim, batch_first = False)
 
         else:
-            self.rnn = nn.RNN(self.feature_length, hidden_dim, batch_first = True) 
+            self.rnn = nn.RNN(self.feature_length, hidden_dim, batch_first = False) 
 
         # Linear layers.
         self.prediction_layer = nn.Linear(hidden_dim, self.output_size)
@@ -225,7 +226,7 @@ class AdmiralNet(nn.Module):
         #activations
         self.relu = nn.ReLU()
 
-    def forward(self, x, throttle, brake):
+    def forward(self, x):#, throttle, brake):
         #resize for convolutional layers
         batch_size = x.shape[0]
         x = x.view(-1, self.input_channels, 66, 200) 
@@ -245,8 +246,10 @@ class AdmiralNet(nn.Module):
         x5 = self.relu(x)
         #maps=[x1,x2,x3,x4,x5]
         # Unpack for the RNN.
-        x = x5.view(batch_size, self.context_length, self.img_features)
-
+        rnn_context_shape = [self.context_length, batch_size, self.img_features]
+        rnn_prediction_shape = [self.sequence_length, batch_size, self.img_features]
+        x = x5.view(rnn_context_shape)
+       # print(x.shape)
         #throttle = throttle.view(throttle.shape[0],throttle.shape[1],-1)
         #brake = brake.view(brake.shape[0],brake.shape[1],-1)  
         #x = torch.cat((x,throttle),2)
@@ -254,14 +257,15 @@ class AdmiralNet(nn.Module):
 
         x, init_hidden = self.rnn(x) 
         if(self.use_float32):
-            zeros = torch.zeros([batch_size, self.sequence_length, self.feature_length], dtype=torch.float32)          
+            zeros = torch.zeros(rnn_prediction_shape, dtype=torch.float32)          
         else:
-            zeros = torch.zeros([batch_size, self.sequence_length, self.feature_length], dtype=torch.float64)
+            zeros = torch.zeros(rnn_prediction_shape, dtype=torch.float64)
 
         if(self.gpu>=0):
             zeros = zeros.cuda(self.gpu)
 
         x, final_hidden = self.rnn(zeros, init_hidden)
+        x = x.view(batch_size, self.hidden_dim)
         predictions = self.prediction_layer(x)
 
         return predictions
